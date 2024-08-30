@@ -5,6 +5,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import os
+import matplotlib.pyplot as plt
+
 
 
 class Trainer:
@@ -105,3 +107,35 @@ class Trainer:
         mse = nn.MSE()(img1,img2)
         return 10*torch.log10(1/mse).item()
     
+    def plot_results(self):
+        plt.figure(figsize=(12, 8))
+        plt.subplot(2, 2, 1)
+        plt.plot(self.train_losses, label='Train Loss')
+        plt.plot(self.val_losses, label='Val Loss')
+        plt.legend()
+        plt.title('Loss')
+        
+        plt.subplot(2, 2, 2)
+        plt.plot(self.train_psnrs, label='Train PSNR')
+        plt.plot(self.val_psnrs, label='Val PSNR')
+        plt.legend()
+        plt.title('PSNR')
+        
+        plt.subplot(2, 2, 3)
+        lr_img = next(iter(self.val_loader))[0][0].cpu()
+        sr_img = self.model(lr_img.unsqueeze(0).to(self.config.device)).squeeze(0).cpu()
+        hr_img = next(iter(self.val_loader))[1][0].cpu()
+        img_grid = make_grid([lr_img, sr_img, hr_img], nrow=3)
+        plt.imshow(img_grid.permute(1, 2, 0))
+        plt.title('LR / SR / HR')
+        plt.axis('off')
+        
+        plt.tight_layout()
+        plt.savefig('training_results.png')
+        plt.close()
+    
+    def save_model(self):
+        torch.save(self.model.state_dict(), self.config.save_path)
+    
+    def load_model(self):
+        self.model.load_state_dict(torch.load(self.config.save_path))
