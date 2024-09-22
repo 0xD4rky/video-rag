@@ -6,46 +6,41 @@ from dataload import *
 
 class ContentLoss(nn.Module):
 
-    def __init__(self,target):
-        super().__init__()
-
+    def __init__(self, target,):
+        super(ContentLoss, self).__init__()
+        # we 'detach' the target content from the tree used
+        # to dynamically compute the gradient: this is a stated value,
+        # not a variable. Otherwise the forward method of the criterion
+        # will throw an error.
         self.target = target.detach()
-        # we use detach as we dont want to include the copy of 'target' tensor to be included in the 
-        # computational graph for gradient calculation
 
     def forward(self, input):
-
         self.loss = F.mse_loss(input, self.target)
-        return self.loss
+        return input
     
-
 
 ## 2. Style Loss
 
 def gram_matrix(input):
+    a, b, c, d = input.size()  # a=batch size(=1)
+    # b=number of feature maps
+    # (c,d)=dimensions of a f. map (N=c*d)
 
-    a,b,c,d = input.size()
+    features = input.view(a * b, c * d)  # resize F_XL into \hat F_XL
 
-    """
-    a = batch size
-    b = number of feature maps (Nl)
-    c*d = dimensions of a feature map (Ml {h*w} )
-    """
+    G = torch.mm(features, features.t())  # compute the gram product
 
-    features = input.view(a*b,c*d)
+    # we 'normalize' the values of the gram matrix
+    # by dividing by the number of element in each feature maps.
+    return G.div(a * b * c * d)
 
-    G = torch.matmul(features, features.t())
+class StyleLoss(nn.Module):
 
-    return G.div(a*b*c*d)
-
-class StyleLoss(nn.Module()):
-
-    def __init__(self,target_features):
-        super().__init__()
-        self.target = gram_matrix(target_features).detach()
+    def __init__(self, target_feature):
+        super(StyleLoss, self).__init__()
+        self.target = gram_matrix(target_feature).detach()
 
     def forward(self, input):
         G = gram_matrix(input)
-        self.loss = F.mse_loss(G, self.target) # mse loss between Gx and Gl
+        self.loss = F.mse_loss(G, self.target)
         return input
-    # by returning input we are maintaining the flow of data while storing losses
