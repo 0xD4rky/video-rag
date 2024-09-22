@@ -27,7 +27,7 @@ loader = transforms.Compose([
 def img_loader(img_path):
     img = Image.open(img_path)
     img = loader(img).unsqueeze(0)
-    return img.to(torch.device("cpu"), torch.float)
+    return img.to(device, torch.float)
 
 
 content = img_loader(r'/home/dell/Documents/cv_stack/nst/data/content.jpg')
@@ -36,4 +36,20 @@ art = img_loader(r'/home/dell/Documents/cv_stack/nst/data/art.jpeg')
 assert art.size() == content.size() 
 # assert is a debugging tool in python, raises an Assertion error if condition is not matched'
 
+unloader = transforms.ToPILImage()
+plt.ion()
 
+def imshow(tensor, title = None):
+
+    image = tensor.cpu().clone() # we clone the tensor to not do changes in it
+    image = image.squeeze()
+    image = unloader(image)
+    plt.imshow(image)
+    if title is not None:
+        plt.title(title)
+    plt.pause(10)
+
+# plt.figure()
+# imshow(art, title = 'Style')
+# plt.figure()
+# imshow(content, title = 'Content')
