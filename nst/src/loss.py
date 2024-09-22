@@ -38,3 +38,14 @@ def gram_matrix(input):
 
     return G.div(a*b*c*d)
 
+class StyleLoss(nn.Module()):
+
+    def __init__(self,target_features):
+        super().__init__()
+        self.target = gram_matrix(target_features).detach()
+
+    def forward(self, input):
+        G = gram_matrix(input)
+        self.loss = F.mse_loss(G, self.target) # mse loss between Gx and Gl
+        return input
+    # by returning input we are maintaining the flow of data while storing losses
