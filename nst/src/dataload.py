@@ -2,54 +2,60 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import torchvision
-from torchvision.models import vgg19, VGG19_Weights
-from torchvision.transforms import transforms
-from torch.utils.data import Dataset, DataLoader
 
-import os
-import numpy as np
-import matplotlib.pyplot as plt
-import copy
 from PIL import Image
+import matplotlib.pyplot as plt
+
+import torchvision.transforms as transforms
+from torchvision.models import vgg19, VGG19_Weights
+
+import copy
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-torch.set_default_device(device) # setting default device as gpu
+torch.set_default_device(device)
 
 
-img_size = 256 if torch.cuda.is_available() else 128
+# desired size of the output image
+imsize = 512 if torch.cuda.is_available() else 128  # use small size if no GPU
 
 loader = transforms.Compose([
-    transforms.Resize((img_size,img_size)),
-    transforms.ToTensor()
-])
-
-def img_loader(img_path):
-    img = Image.open(img_path)
-    img = loader(img).unsqueeze(0)
-    return img.to(device, torch.float)
+    transforms.Resize((imsize,imsize)),  # scale imported image
+    transforms.ToTensor()])  # transform it into a torch tensor
 
 
-content = img_loader(r'/home/dell/Documents/cv_stack/nst/data/content.jpg')
-art = img_loader(r'/home/dell/Documents/cv_stack/nst/data/art.jpeg')
+def image_loader(image_name):
+    image = Image.open(image_name)
+    # fake batch dimension required to fit network's input dimensions
+    image = loader(image).unsqueeze(0)
+    return image.to(device, torch.float)
 
-assert art.size() == content.size() 
-# assert is a debugging tool in python, raises an Assertion error if condition is not matched'
 
-unloader = transforms.ToPILImage()
+style_img = image_loader(r"/home/dell/Documents/cv_stack/nst/data/art.jpg")
+content_img = image_loader(r"/home/dell/Documents/cv_stack/nst/data/content.jpg")
+
+assert style_img.size() == content_img.size(), \
+    "we need to import style and content images of the same size"
+
+
+unloader = transforms.ToPILImage()  # reconvert into PIL image
+
 plt.ion()
 
-def imshow(tensor, title = None):
 
-    image = tensor.cpu().clone() # we clone the tensor to not do changes in it
-    image = image.squeeze()
+def imshow(tensor, title=None):
+    image = tensor.cpu().clone()  # we clone the tensor to not do changes on it
+    image = image.squeeze(0)      # remove the fake batch dimension
     image = unloader(image)
     plt.imshow(image)
     if title is not None:
         plt.title(title)
-    plt.pause(10)
+    plt.pause(0.001) # pause a bit so that plots are updated
 
-# plt.figure()
-# imshow(art, title = 'Style')
-# plt.figure()
-# imshow(content, title = 'Content')
+"""
+plt.figure()
+imshow(style_img, title='Style Image')
+
+plt.figure()
+imshow(content_img, title='Content Image')
+
+"""
