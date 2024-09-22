@@ -1,11 +1,7 @@
 from dataload import *
 from loss import *
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-torch.set_default_device(device)
-
-
-cnn = vgg19(weights = VGG19_Weights.DEFAULT).features.eval()
+cnn = vgg19(weights=VGG19_Weights.DEFAULT).features.eval()
 
 cnn_normalization_mean = torch.tensor([0.485, 0.456, 0.406])
 cnn_normalization_std = torch.tensor([0.229, 0.224, 0.225])
@@ -26,28 +22,31 @@ class Normalization(nn.Module):
         return (img - self.mean) / self.std
     
 
-"""
-NOTE:  
-A Sequential module contains an ordered list of child modules. For instance, vgg19.features contains a sequence (Conv2d, ReLU, MaxPool2d, Conv2d, ReLU…) aligned in the right order of depth. 
-We need to add our content loss and style loss layers immediately after the convolution layer they are detecting. 
-To do this we must create a new Sequential module that has content loss and style loss modules correctly inserted.
-"""
-
+# desired depth layers to compute style/content losses :
 content_layers_default = ['conv_4']
 style_layers_default = ['conv_1', 'conv_2', 'conv_3', 'conv_4', 'conv_5']
 
-def get_style_model_and_losses(cnn, normalization_mean, normalization_std,art,content,content_layers = content_layers_default, style_layers = style_layers_default):
+def get_style_model_and_losses(cnn, normalization_mean, normalization_std,
+                               style_img, content_img,
+                               content_layers=content_layers_default,
+                               style_layers=style_layers_default):
+    # normalization module
+    normalization = Normalization(normalization_mean, normalization_std)
 
-    normalization = Normalization(normalization_mean,normalization_std)
+    # just in order to have an iterable access to or list of content/style
+    # losses
     content_losses = []
     style_losses = []
 
+    # assuming that ``cnn`` is a ``nn.Sequential``, so we make a new ``nn.Sequential``
+    # to put in modules that are supposed to be activated sequentially
     model = nn.Sequential(normalization)
-    i = 0
+
+    i = 0  # increment every time we see a conv
     for layer in cnn.children():
         if isinstance(layer, nn.Conv2d):
-            i += 1 # increase count when we see a convolutional layer
-            name = 'conv{}'.format(i)
+            i += 1
+            name = 'conv_{}'.format(i)
         elif isinstance(layer, nn.ReLU):
             name = 'relu_{}'.format(i)
             # The in-place version doesn't play very nicely with the ``ContentLoss``
@@ -60,24 +59,24 @@ def get_style_model_and_losses(cnn, normalization_mean, normalization_std,art,co
             name = 'bn_{}'.format(i)
         else:
             raise RuntimeError('Unrecognized layer: {}'.format(layer.__class__.__name__))
-        
-        model.add_module(name,layer)
-        # we are creating our own sequential model where we will add content and style losses
+
+        model.add_module(name, layer)
 
         if name in content_layers:
-
-            target = model(content).detach()
+            # add content loss:
+            target = model(content_img).detach()
             content_loss = ContentLoss(target)
             model.add_module("content_loss_{}".format(i), content_loss)
             content_losses.append(content_loss)
 
         if name in style_layers:
-
-            target_feature = model(art).detach()
+            # add style loss:
+            target_feature = model(style_img).detach()
             style_loss = StyleLoss(target_feature)
             model.add_module("style_loss_{}".format(i), style_loss)
             style_losses.append(style_loss)
 
+    # now we trim off the layers after the last content and style losses
     for i in range(len(model) - 1, -1, -1):
         if isinstance(model[i], ContentLoss) or isinstance(model[i], StyleLoss):
             break
@@ -85,3 +84,5 @@ def get_style_model_and_losses(cnn, normalization_mean, normalization_std,art,co
     model = model[:(i + 1)]
 
     return model, style_losses, content_losses
+
+input_img = content_img.clone()
