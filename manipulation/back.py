@@ -48,4 +48,14 @@ congif = {
     "floor_path" : "/path/to/floor_image.png"
 }
 
+output_size = (1365, 768)
+wall_height = int(output_size[1] * 0.7)
+floor_height = output_size[1] - wall_height
+wall_resized = wall_image.resize((output_size[0], wall_height))
+floor_resized = floor_image.resize((output_size[0], floor_height))
+
+
+final_background = Image.new("RGBA", output_size)
+final_background.paste(wall_resized, (0, 0))
+final_background.paste(floor_resized, (0, wall_height))
 
