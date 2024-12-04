@@ -2,51 +2,54 @@ from PIL import Image, ImageOps
 
 def apply_mask(image, mask):
     """
-    Apply a mask to an image, removing the background.
-    :param image: PIL Image in RGBA.
-    :param mask: PIL Image in grayscale (L mode) serving as the mask.
-    :return: Image with the mask applied.
+    Apply a mask to remove the background from the car image.
     """
     mask = mask.resize(image.size, Image.Resampling.LANCZOS)
     return Image.composite(image, Image.new("RGBA", image.size, (0, 0, 0, 0)), mask)
 
-def place_on_background(car, background, position):
+def resize_image(image, target_size):
     """
-    Place the car image on the specified background at the given position.
-    :param car: PIL Image of the car (with transparency).
-    :param background: PIL Image of the background.
-    :param position: Tuple (x, y) for where to place the car.
-    :return: Background with the car placed on it.
+    Resize image maintaining aspect ratio.
     """
-    background.paste(car, position, car)
+    return ImageOps.contain(image, target_size)
+
+def compose_background(wall, floor, dimensions):
+    """
+    Compose the wall and floor into a single background image.
+    """
+    wall_height = int(dimensions[1] * 0.7)
+    floor_height = dimensions[1] - wall_height
+    wall = wall.resize((dimensions[0], wall_height))
+    floor = floor.resize((dimensions[0], floor_height))
+    
+    background = Image.new("RGBA", dimensions)
+    background.paste(wall, (0, 0))
+    background.paste(floor, (0, wall_height))
     return background
 
-def add_shadow(background, shadow_mask, position):
+def add_shadow(background, shadow_mask, position, size):
     """
-    Add shadow to the car, enhancing the 3D effect.
-    :param background: PIL Image of the background with the car.
-    :param shadow_mask: PIL Image, grayscale mask for the shadow.
-    :param position: Tuple (x, y) for where to place the shadow.
-    :return: Background with the shadow added.
+    Add shadow to the image, adjusting size and position.
     """
-    shadow = Image.new("RGBA", shadow_mask.size, (0, 0, 0, 150))  # Shadow color and opacity
-    shadow = shadow.resize(background.size, Image.Resampling.LANCZOS)
+    shadow_mask = shadow_mask.resize(size, Image.Resampling.LANCZOS)
+    shadow = Image.new("RGBA", size, (0, 0, 0, 150))
     background.paste(shadow, position, shadow_mask)
     return background
 
-car_image = Image.open("/path/to/car_image.jpeg").convert("RGBA")
-mask = Image.open("/path/to/mask.png").convert("L")
-shadow_mask = Image.open("/path/to/shadow_mask.png").convert("L")
-wall_image = Image.open("/path/to/wall_image.png").convert("RGBA")
-floor_image = Image.open("/path/to/floor_image.png").convert("RGBA")
 
-congif = {
-    "car_path" : "/path/to/car_image.jpeg",
-    "mask_path" : "/path/to/mask.png",
-    "shadow_path" : "/path/to/shadow_mask.png",
-    "wall_path" : "/path/to/wall_image.png",
-    "floor_path" : "/path/to/floor_image.png"
+config = {
+    "car_path" : "/Users/darky/Documents/cv_stack/assignment/images/1.jpeg",
+    "mask_path" : "/Users/darky/Documents/cv_stack/assignment/car_masks/1.png",
+    "shadow_path" : "/Users/darky/Documents/cv_stack/assignment/shadow_masks/1.png",
+    "wall_path" : "/Users/darky/Documents/cv_stack/assignment/wall.png",
+    "floor_path" : "/Users/darky/Documents/cv_stack/assignment/floor.png"
 }
+
+car_image = Image.open(config["car_path"]).convert("RGBA")
+mask = Image.open(config["mask_path"]).convert("L")
+shadow_mask = Image.open(config["shadow_path"]).convert("L")
+wall_image = Image.open(config["wall_path"]).convert("RGBA")
+floor_image = Image.open(config["floor_path"]).convert("RGBA")
 
 output_size = (1365, 768)
 wall_height = int(output_size[1] * 0.7)
@@ -60,11 +63,11 @@ final_background.paste(wall_resized, (0, 0))
 final_background.paste(floor_resized, (0, wall_height))
 
 car_masked = apply_mask(car_image, mask)
-car_position = (250, wall_height - car_masked.height // 4 + 50)  # Adjust position for realism
+car_position = (250, wall_height - car_masked.height // 4 + 50)
 background_with_car = place_on_background(car_masked, final_background, car_position)
 
-shadow_position = (car_position[0], car_position[1] + car_masked.height // 4)  # Adjust shadow position
+shadow_position = (car_position[0], car_position[1] + car_masked.height // 4)
 final_image = add_shadow(background_with_car, shadow_mask, shadow_position)
 
 final_image.show()
-final_image.save("/path/to/save/final_output.png")
+final_image.save("/Users/darky/Documents/cv_stack")
