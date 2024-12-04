@@ -59,3 +59,12 @@ final_background = Image.new("RGBA", output_size)
 final_background.paste(wall_resized, (0, 0))
 final_background.paste(floor_resized, (0, wall_height))
 
+car_masked = apply_mask(car_image, mask)
+car_position = (250, wall_height - car_masked.height // 4 + 50)  # Adjust position for realism
+background_with_car = place_on_background(car_masked, final_background, car_position)
+
+shadow_position = (car_position[0], car_position[1] + car_masked.height // 4)  # Adjust shadow position
+final_image = add_shadow(background_with_car, shadow_mask, shadow_position)
+
+final_image.show()
+final_image.save("/path/to/save/final_output.png")
