@@ -51,23 +51,16 @@ shadow_mask = Image.open(config["shadow_path"]).convert("L")
 wall_image = Image.open(config["wall_path"]).convert("RGBA")
 floor_image = Image.open(config["floor_path"]).convert("RGBA")
 
-output_size = (1365, 768)
-wall_height = int(output_size[1] * 0.7)
-floor_height = output_size[1] - wall_height
-wall_resized = wall_image.resize((output_size[0], wall_height))
-floor_resized = floor_image.resize((output_size[0], floor_height))
-
-
-final_background = Image.new("RGBA", output_size)
-final_background.paste(wall_resized, (0, 0))
-final_background.paste(floor_resized, (0, wall_height))
-
 car_masked = apply_mask(car_image, mask)
-car_position = (250, wall_height - car_masked.height // 4 + 50)
-background_with_car = place_on_background(car_masked, final_background, car_position)
+background = compose_background(wall_image, floor_image, (1365, 768))
+car_position = (250, 180)  # Adjust based on visual alignment
+background_with_car = background.copy()
+background_with_car.paste(car_masked, car_position, car_masked)
 
-shadow_position = (car_position[0], car_position[1] + car_masked.height // 4)
-final_image = add_shadow(background_with_car, shadow_mask, shadow_position)
+# Adjust shadow
+shadow_size = (background_with_car.width, car_masked.height // 4)
+shadow_position = (car_position[0], car_position[1] + car_masked.height - shadow_size[1])
+final_image = add_shadow(background_with_car, shadow_mask, shadow_position, shadow_size)
 
+# Save or display the final image
 final_image.show()
-final_image.save("/Users/darky/Documents/cv_stack")
