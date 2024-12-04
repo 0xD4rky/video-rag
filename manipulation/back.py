@@ -2,39 +2,41 @@ from PIL import Image, ImageOps
 
 def apply_mask(image, mask):
     """
-    Apply a mask to remove the background from the car image.
+    Applies a mask to an image to remove the background, retaining transparency.
     """
     mask = mask.resize(image.size, Image.Resampling.LANCZOS)
     return Image.composite(image, Image.new("RGBA", image.size, (0, 0, 0, 0)), mask)
 
-def resize_image(image, target_size):
+def center_and_compose_background(car, wall, floor, output_size):
     """
-    Resize image maintaining aspect ratio.
+    Composes the wall and floor into a single background image and centers the car on it.
     """
-    return ImageOps.contain(image, target_size)
+    wall_height = int(output_size[1] * 0.7)
+    floor_height = output_size[1] - wall_height
 
-def compose_background(wall, floor, dimensions):
-    """
-    Compose the wall and floor into a single background image.
-    """
-    wall_height = int(dimensions[1] * 0.7)
-    floor_height = dimensions[1] - wall_height
-    wall = wall.resize((dimensions[0], wall_height))
-    floor = floor.resize((dimensions[0], floor_height))
-    
-    background = Image.new("RGBA", dimensions)
+    wall = wall.resize((output_size[0], wall_height))
+    floor = floor.resize((output_size[0], floor_height))
+
+    background = Image.new("RGBA", output_size)
     background.paste(wall, (0, 0))
     background.paste(floor, (0, wall_height))
+
+    # Calculate the position to center the car
+    car_position = ((output_size[0] - car.width) // 2, wall_height - (car.height // 2))
+    background.paste(car, car_position, car)
+    
+    return background, car_position
+
+def add_shadow(background, shadow_mask, car_position, car_size):
+    """
+    Adds a shadow under the car.
+    """
+    shadow_mask = shadow_mask.resize(car_size, Image.Resampling.LANCZOS)
+    shadow = Image.new("RGBA", car_size, (0, 0, 0, 100))  # Adjust shadow transparency as needed
+    shadow_position = (car_position[0], car_position[1] + (car_size[1] // 2))
+    background.paste(shadow, shadow_position, shadow_mask)
     return background
 
-def add_shadow(background, shadow_mask, position, size):
-    """
-    Add shadow to the image, adjusting size and position.
-    """
-    shadow_mask = shadow_mask.resize(size, Image.Resampling.LANCZOS)
-    shadow = Image.new("RGBA", size, (0, 0, 0, 150))
-    background.paste(shadow, position, shadow_mask)
-    return background
 
 
 config = {
