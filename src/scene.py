@@ -32,3 +32,27 @@ def extract_scenes(video_path, scene_duration=2, fps=5):
 
     cap.release()
     return scenes, video_fps
+
+def save_scene_video(video_path, start_time, end_time, output_path):
+
+    """
+    A function for saving the relevant retrieved scenes
+    """
+    cap = cv2.VideoCapture(video_path)
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    
+    cap.set(cv2.CAP_PROP_POS_MSEC, start_time * 1000)
+    while cap.get(cv2.CAP_PROP_POS_MSEC) < end_time * 1000:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        out.write(frame)
+    
+    cap.release()
+    out.release()
+
