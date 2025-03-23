@@ -50,3 +50,40 @@ def fetch_images_from_google(query, num_images = 3):
             img = Image.open(BytesIO(response.content)).convert("RGB")
             images.append((url, img))
     return images
+
+
+def create_image_embeddings(images, normalize=True):
+    """
+    Creates embeddings for a list of images using the CLIP model.
+    
+    The function processes images retrieved from SERPAPI and generates
+    vector representations (embeddings) that capture the semantic content
+    of each image. These embeddings can be used for similarity comparison,
+    search, and other computer vision tasks.
+    
+    Args:
+        images: List of tuples containing (url, PIL.Image) from fetch_images_from_google
+        normalize: Whether to normalize embeddings (recommended for similarity comparison)
+    
+    Returns:
+        Dictionary mapping image URLs to their corresponding embeddings
+    """
+    image_embeddings = {}
+    
+    for url, img in images:
+        try:
+
+            inputs = processor(images=img, return_tensors="pt")
+
+            with torch.no_grad():
+                image_features = model.get_image_features(**inputs)
+                
+            if normalize:
+                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+
+            image_embeddings[url] = image_features.squeeze(0)
+            
+        except Exception as e:
+            print(f"Error processing image from URL {url}: {e}")
+    
+    return image_embeddings
