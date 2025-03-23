@@ -29,3 +29,6 @@ def extract_scenes(video_path, scene_duration=2, fps=5):
         
         if frames:
             scenes.append((start_time, end_time, frames, frame_indices))
+
+    cap.release()
+    return scenes, video_fps
