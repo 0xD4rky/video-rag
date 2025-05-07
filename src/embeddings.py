@@ -9,13 +9,16 @@ from torch.nn.functional import cosine_similarity
 from serpapi import GoogleSearch
 from dotenv import load_dotenv
 
+from scene import extract_scenes, save_scene_video
+
 model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 load_dotenv()
 SERPAPI_KEY = os.environ.get("SERPAPI_KEY")
 
-#### taking the query input from the user
+#### video path and query input from the user
+video_path = input("Enter the video's path to be searched").strip()
 text_query = input("Enter your query to be searched in the video").strip()
 
 
@@ -35,7 +38,6 @@ def fetch_images_from_google(query, num_images = 3):
 
         a list of tuple containing urls and the pixel arrays of the retrieved images
     """
-
     search = GoogleSearch({
         "q": query,
         "tbm": "isch",
@@ -53,7 +55,6 @@ def fetch_images_from_google(query, num_images = 3):
             img = Image.open(BytesIO(response.content)).convert("RGB")
             images.append((url, img))
     return images
-
 
 def create_image_embeddings(images, normalize=True):
     """
@@ -79,7 +80,6 @@ def create_image_embeddings(images, normalize=True):
 
             with torch.no_grad():
                 image_features = model.get_image_features(**inputs)
-
             if normalize:
                 image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
@@ -87,17 +87,48 @@ def create_image_embeddings(images, normalize=True):
             
         except Exception as e:
             print(f"Error processing image from URL {url}: {e}")
-    
+
     return image_embeddings
 
-def create_text_embeddings(text, normalize = True):
+def create_text_embeddings(text_query, normalize = True):
 
-    text_inputs = processor(text=[text], return_tensors="pt", padding=True)
+    text_inputs = processor(text=[text_query], return_tensors="pt", padding=True)
     with torch.no_grad():
         text_embedding = model.get_text_features(**text_inputs)
 
     fetched_images = fetch_images_from_google(text_query+"images")
     if fetched_images:
-        images = [img[1] for img in fetched_images]
 
-    #text_embedding = text_embedding + create_image_embeddings()
+        text_inputs = processor(text=[text_query], return_tensors="pt", padding=True)
+        with torch.no_grad():
+            text_embedding = model.get_text_features(**text_inputs)
+
+        images = [img[1] for img in fetched_images]
+        image_embeddings = create_image_embeddings(images)
+        text_embedding = (text_embedding + image_embeddings.mean(dim = 0, keepdim = True))/2
+
+    return text_embedding
+
+scenes, video_fps = extract_scenes(video_path, scene_duration=5, fps=5)
+if not scenes:
+    print("No scenes extracted.")
+    exit()
+
+scene_similarity_scores = []
+
+def scene_iterations(scenes):
+    """
+    a function to iterate over each scene separately
+    """
+
+    for start_time, end_time, frames, frame_indices in scenes:
+        inputs = processor(images = frames, return_tensors = "pt", padding = True)
+        with torch.no_grad():
+            image_embeddings = model.get_image_features(**inputs)
+        scene_embedding = image_embeddings.mean(dim=0, keepdim=True)
+        similarity = cosine_similarity(create_text_embeddings(text_query), scene_embedding).item()
+        scene_similarity_scores.append((start_time, end_time, similarity))
+
+    
+
+
