@@ -1,9 +1,7 @@
 import cv2
 from PIL import Image
 
-
-
-def extract_scenes(video_path, scene_duration=2, fps=5):
+def extract_scenes(video_path, scene_duration=5, fps=5):
 
     """
     This function is for extracting the scenes from the video.
