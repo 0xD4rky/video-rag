@@ -73,11 +73,12 @@ def create_image_embeddings(images, normalize=True):
     for url, img in images:
         try:
 
-            inputs = processor(images=img, return_tensors="pt")
+            inputs = processor(images=img, return_tensors="pt", padding=True)
 
             with torch.no_grad():
                 image_features = model.get_image_features(**inputs)
-                
+            
+            text_inputs = processor(text=[text_query], return_tensors="pt", padding=True)
             if normalize:
                 image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
