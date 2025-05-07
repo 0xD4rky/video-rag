@@ -15,6 +15,9 @@ processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 load_dotenv()
 SERPAPI_KEY = os.environ.get("SERPAPI_KEY")
 
+#### taking the query input from the user
+text_query = input("Enter your query to be searched in the video").strip()
+
 
 def fetch_images_from_google(query, num_images = 3):
 
@@ -72,13 +75,11 @@ def create_image_embeddings(images, normalize=True):
     
     for url, img in images:
         try:
-
             inputs = processor(images=img, return_tensors="pt", padding=True)
 
             with torch.no_grad():
                 image_features = model.get_image_features(**inputs)
-            
-            text_inputs = processor(text=[text_query], return_tensors="pt", padding=True)
+
             if normalize:
                 image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
@@ -88,3 +89,15 @@ def create_image_embeddings(images, normalize=True):
             print(f"Error processing image from URL {url}: {e}")
     
     return image_embeddings
+
+def create_text_embeddings(text, normalize = True):
+
+    text_inputs = processor(text=[text], return_tensors="pt", padding=True)
+    with torch.no_grad():
+        text_embedding = model.get_text_features(**text_inputs)
+
+    fetched_images = fetch_images_from_google(text_query+"images")
+    if fetched_images:
+        images = [img[1] for img in fetched_images]
+
+    #text_embedding = text_embedding + create_image_embeddings()
