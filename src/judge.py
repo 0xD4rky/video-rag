@@ -138,8 +138,92 @@ class VideoJudge:
             
             return score, output_text
         
-    
+    def judge_scenes(self, video_path, scenes_with_scores, query):
 
+        print(f"\nAnalyzing {len(scenes_with_scores)} scenes using a video understanding llm")
+
+        detailed_results = []
+        
+        for i, (start_time, end_time, clip_similarity) in enumerate(tqdm(scenes_with_scores, desc="Analyzing scenes")):
+            print(f"\nAnalyzing Scene {i+1}: {start_time:.1f}s - {end_time:.1f}s")
+            
+            relevance_score, explanation = self.analyze_scene(video_path, start_time, end_time, query)
+            
+            detailed_results.append({
+                'scene_index': i + 1,
+                'start_time': start_time,
+                'end_time': end_time,
+                'clip_similarity': clip_similarity,
+                'llm_relevance_score': relevance_score,
+                'explanation': explanation,
+                'combined_score': 0.6 * relevance_score + 0.4 * (clip_similarity * 10)  # Combine LLM score with CLIP score
+            })
+            
+            print(f"LLM Relevance Score: {relevance_score:.2f}/10")
+            print(f"CLIP Similarity: {clip_similarity:.4f}")
+            print(f"Combined Score: {detailed_results[-1]['combined_score']:.2f}")
+            print(f"Analysis: {explanation}")
+
+        # Sort by combined score
+        detailed_results.sort(key=lambda x: x['combined_score'], reverse=True)
+        
+        return detailed_results
+
+def select_best_scene(video_path, top_scenes, query):
+    """
+    Main function to select the best scene using video understanding
+    
+    Args:
+        video_path: Path to the original video
+        top_scenes: List of tuples (start_time, end_time, similarity_score) from CLIP
+        query: User's search query
+    
+    Returns:
+        Dictionary with details of the best scene
+    """
+    judge = VideoJudge()
+    
+    results = judge.judge_scenes(video_path, top_scenes, query)
+    
+    if not results:
+        print("No scenes could be analyzed!")
+        return None
+    
+    best_scene = results[0]
+    
+    print(f"\n{'='*60}")
+    print("FINAL JUDGMENT - MOST RELEVANT SCENE:")
+    print(f"{'='*60}")
+    print(f"Scene {best_scene['scene_index']}: {best_scene['start_time']:.1f}s - {best_scene['end_time']:.1f}s")
+    print(f"LLM Relevance Score: {best_scene['llm_relevance_score']:.2f}/10")
+    print(f"CLIP Similarity Score: {best_scene['clip_similarity']:.4f}")
+    print(f"Combined Score: {best_scene['combined_score']:.2f}")
+    print(f"\nAnalysis:")
+    print(best_scene['explanation'])
+    print(f"{'='*60}")
+    
+    # Also show rankings of all scenes
+    print(f"\nAll Scenes Ranked:")
+    for i, scene in enumerate(results):
+        print(f"{i+1}. Scene {scene['scene_index']}: {scene['start_time']:.1f}s-{scene['end_time']:.1f}s "
+              f"(Combined: {scene['combined_score']:.2f}, LLM: {scene['llm_relevance_score']:.2f}, "
+              f"CLIP: {scene['clip_similarity']:.4f})")
+    
+    return best_scene
+
+if __name__ == "__main__":
+    # Test data - replace with actual scene data
+    video_path = "test_video.mp4"
+    query = "person walking with a dog"
+    top_scenes = [
+        (10.0, 15.0, 0.85),  # (start_time, end_time, clip_similarity)
+        (25.0, 30.0, 0.82),
+        (45.0, 50.0, 0.78)
+    ]
+    
+    best_scene = select_best_scene(video_path, top_scenes, query)
+    if best_scene:
+        print(f"Best scene selected: {best_scene['start_time']:.1f}s - {best_scene['end_time']:.1f}s")
 
 
         
