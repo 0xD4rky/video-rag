@@ -54,3 +54,45 @@ class VideoJudge:
         
         cap.release()
         return frames
+    
+    def analyze_scene(self, video_path, start_time, end_time, query):
+        """
+        Analyze a single scene and return relevance score and explanation
+        """
+
+        frames = self.extract_key_frames(video_path, start_time, end_time)
+        if not frames:
+            return 0.0, "No frames could be extracted from this scene."
+        
+        prompt = f"""
+        Analyze these video frames from a scene (timespan: {start_time:.1f}s - {end_time:.1f}s) and determine how relevant they are to the query: "{query}"
+
+        Please provide:
+        1. A relevance score from 0-10 (where 10 is perfectly relevant)
+        2. A brief explanation of what you see in the frames
+        3. How well the scene matches the query
+
+        Respond in JSON format:
+        {{
+            "relevance_score": <score_0_to_10>,
+            "description": "<what_you_see_in_frames>",
+            "explanation": "<why_this_scene_matches_or_doesnt_match_the_query>"
+        }}
+        """
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text", "text": prompt
+                    }
+                ] + [{"type": "image", "image": frame} for frame in frames[:3]]
+            }
+        ]
+
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        
+
