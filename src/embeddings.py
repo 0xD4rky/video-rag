@@ -10,6 +10,7 @@ from serpapi import GoogleSearch
 from dotenv import load_dotenv
 from tqdm import tqdm
 import numpy as np
+import shutil
 
 from scene import extract_scenes, save_scene_video
 
@@ -138,6 +139,9 @@ def main():
     
     save_dir = os.path.dirname(video_path) 
     output_dir = os.path.join(save_dir, "output")
+
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"\nSaving top {top_k} scenes:")
