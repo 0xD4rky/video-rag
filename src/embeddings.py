@@ -13,6 +13,7 @@ import numpy as np
 import shutil
 
 from scene import extract_scenes, save_scene_video
+from judge import select_best_scene
 
 # Use CUDA if available, otherwise MPS, then CPU
 device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
@@ -137,28 +138,40 @@ def main():
     top_k = min(3, len(scene_similarity_scores))
     similar_scenes = scene_similarity_scores[:top_k]
     
-    save_dir = os.path.dirname(video_path) 
-    output_dir = os.path.join(save_dir, "output")
-
-    if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
-
-    print(f"\nSaving top {top_k} scenes:")
+    print(f"\nTop {top_k} scenes from CLIP similarity:")
     for i, (start_time, end_time, similarity) in enumerate(similar_scenes):
-        scene_video_path = os.path.join(output_dir, f"scene_{i+1}_{int(start_time)}s_{int(end_time)}s.mp4")
-        save_scene_video(video_path, start_time, end_time, scene_video_path)
-        print(f"Scene {i+1}: {start_time:.1f}s - {end_time:.1f}s | Similarity: {similarity:.4f} (Saved: {os.path.basename(scene_video_path)})")
+        print(f"Scene {i+1}: {start_time:.1f}s - {end_time:.1f}s | Similarity: {similarity:.4f}")
+    
+    # Use video understanding model to judge the scenes
+    print(f"\n{'='*60}")
+    print("USING VIDEO UNDERSTANDING MODEL TO SELECT BEST SCENE")
+    print(f"{'='*60}")
+    
+    best_scene = select_best_scene(video_path, similar_scenes, text_query)
+    
+    if best_scene:
+        # Save only the best scene selected by the judge
+        save_dir = os.path.dirname(video_path) 
+        output_dir = os.path.join(save_dir, "output")
 
-    print("\nTop similar scenes retrieved and saved successfully.")
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+
+        scene_video_path = os.path.join(output_dir, f"best_scene_{int(best_scene['start_time'])}s_{int(best_scene['end_time'])}s.mp4")
+        save_scene_video(video_path, best_scene['start_time'], best_scene['end_time'], scene_video_path)
+        
+        print(f"\n{'='*60}")
+        print("FINAL RESULT:")
+        print(f"{'='*60}")
+        print(f"Best scene saved: {os.path.basename(scene_video_path)}")
+        print(f"Time span: {best_scene['start_time']:.1f}s - {best_scene['end_time']:.1f}s")
+        print(f"Final score: {best_scene['combined_score']:.2f}")
+        print(f"Location: {scene_video_path}")
+        print("Scene retrieved and saved successfully!")
+    else:
+        print("Could not select the best scene.")
 
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
