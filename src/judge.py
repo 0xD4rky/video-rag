@@ -64,6 +64,7 @@ class VideoJudge:
         if not frames:
             return 0.0, "No frames could be extracted from this scene."
         
+
         prompt = f"""
         Analyze these video frames from a scene (timespan: {start_time:.1f}s - {end_time:.1f}s) and determine how relevant they are to the query: "{query}"
 
@@ -94,5 +95,53 @@ class VideoJudge:
         text = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
+
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = self.processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt",
+        )
+
+        with torch.no_grad(): 
+            generated_ids = self.model.generate(**inputs, max_new_tokens=512, do_sample=True, temperature=0.1)
+            generated_ids_trimmed = [
+                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+            ]
+            output_text = self.processor.batch_decode(
+                generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+            )[0]
+
+        try:
+
+            response = json.loads(output_text.strip())
+            relevance_score = float(response.get("relevance_score", 0))
+            description = response.get("description", "No description provided")
+            explanation = response.get("explanation", "No explanation provided")
+
+            return relevance_score, f"Description: {description}\nExplanation: {explanation}"
+
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"Error parsing model response: {e}")
+            print(f"Raw response: {output_text}")
+            # Fallback: try to extract score from text
+            lines = output_text.lower().split('\n')
+            score = 5.0  # Default score
+            for line in lines:
+                if 'score' in line and any(char.isdigit() for char in line):
+                    numbers = [float(s) for s in line.split() if s.replace('.', '').isdigit()]
+                    if numbers:
+                        score = min(10.0, max(0.0, numbers[0]))
+                        break
+            
+            return score, output_text
         
+    
+
+
+
+        
+
 
