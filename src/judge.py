@@ -211,21 +211,6 @@ def select_best_scene(video_path, top_scenes, query):
     
     return best_scene
 
-if __name__ == "__main__":
-    # Test data - replace with actual scene data
-    video_path = "test_video.mp4"
-    query = "person walking with a dog"
-    top_scenes = [
-        (10.0, 15.0, 0.85),  # (start_time, end_time, clip_similarity)
-        (25.0, 30.0, 0.82),
-        (45.0, 50.0, 0.78)
-    ]
-    
-    best_scene = select_best_scene(video_path, top_scenes, query)
-    if best_scene:
-        print(f"Best scene selected: {best_scene['start_time']:.1f}s - {best_scene['end_time']:.1f}s")
-
-
         
 
 
