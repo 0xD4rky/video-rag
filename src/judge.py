@@ -105,6 +105,8 @@ class VideoJudge:
             return_tensors="pt",
         )
 
+        inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()} # moving all inputs to device to resolve error fix
+
         with torch.no_grad(): 
             generated_ids = self.model.generate(**inputs, max_new_tokens=512, do_sample=True, temperature=0.1)
             generated_ids_trimmed = [
