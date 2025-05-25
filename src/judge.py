@@ -112,9 +112,9 @@ class VideoJudge:
             print(f"Error expanding query with Gemini: {e}")
             return query
 
-    def extract_key_frames(self, video_path, start_time, end_time, num_frames=3):
+    def extract_key_frames(self, video_path, start_time, end_time, num_frames=4):
         """
-        Extract key frames from a video segment (reduced to 3 frames to save memory)
+        Extract key frames from a video segment with adaptive sampling
         """
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -123,12 +123,18 @@ class VideoJudge:
         end_frame = int(end_time * fps)
         total_frames = end_frame - start_frame
         
-        # Calculate frame indices to extract
+        # Adaptive frame selection based on segment length
         if total_frames <= num_frames:
             frame_indices = list(range(start_frame, end_frame))
         else:
-            step = total_frames // num_frames
-            frame_indices = [start_frame + i * step for i in range(num_frames)]
+            # Sample frames more intelligently - beginning, middle, end, and one random
+            quarter = total_frames // 4
+            frame_indices = [
+                start_frame,  # Beginning
+                start_frame + quarter,  # First quarter
+                start_frame + 2 * quarter,  # Middle
+                start_frame + 3 * quarter,  # Third quarter
+            ]
         
         frames = []
         for frame_idx in frame_indices:
@@ -136,8 +142,8 @@ class VideoJudge:
             ret, frame = cap.read()
             if ret:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                # Resize to reduce memory usage
-                frame_pil = Image.fromarray(frame).resize((224, 224))
+                # Resize to optimal size for LLaVA (336x336 is recommended)
+                frame_pil = Image.fromarray(frame).resize((336, 336))
                 frames.append(frame_pil)
         
         cap.release()
