@@ -154,78 +154,149 @@ class VideoJudge:
         Analyze a single frame and return description
         """
         try:
-            # Generate caption for the frame
-            inputs = self.processor(frame, return_tensors="pt").to(self.device)
+            if self.use_llava:
+                # Use LLaVA with detailed prompting
+                prompt = f"""<image>USER: Look at this image and describe what you see in detail, focusing on elements related to: {expanded_query}
+
+Pay attention to:
+- Objects and people present
+- Actions being performed
+- Setting and environment
+- Any relevant details that match the query
+
+Provide a detailed description.
+ASSISTANT:"""
+                
+                inputs = self.processor(prompt, frame, return_tensors="pt").to(self.device)
+                
+                with torch.no_grad():
+                    output = self.model.generate(
+                        **inputs, 
+                        max_length=100, 
+                        do_sample=True,
+                        temperature=0.7,
+                        pad_token_id=self.processor.tokenizer.eos_token_id
+                    )
+                    
+                response = self.processor.decode(output[0], skip_special_tokens=True)
+
+                if "ASSISTANT:" in response:
+                    description = response.split("ASSISTANT:")[-1].strip()
+                else:
+                    description = response.strip()
             
-            with torch.no_grad():
-                out = self.model.generate(**inputs, max_length=100, num_beams=5)
-                caption = self.processor.decode(out[0], skip_special_tokens=True)
+            else:
+                inputs = self.processor(frame, return_tensors="pt").to(self.device)
+                
+                with torch.no_grad():
+                    out = self.model.generate(**inputs, max_length=100, num_beams=5)
+                    description = self.processor.decode(out[0], skip_special_tokens=True)
+
+            self.clear_memory() # clearing memory after each inference
+            return description
             
-            return caption
+         
         except Exception as e:
             print(f"Error analyzing frame: {e}")
+            self.clear_memory()
             return "Could not analyze frame"
-
-    def calculate_relevance_score(self, descriptions, query):
-        """
-        Calculate relevance score based on text matching
-        """
-        query_words = set(query.lower().split())
-        total_score = 0
         
+    def calculate_semantic_similarity(self, descriptions: List[str], expanded_query: str) -> float:
+        """
+        Calculate semantic similarity using sentence transformers
+        """
+        try:
+            # Encode descriptions and query
+            description_embeddings = self.sentence_model.encode(descriptions)
+            query_embedding = self.sentence_model.encode([expanded_query])
+            
+            # Calculate cosine similarities
+            similarities = util.cos_sim(query_embedding, description_embeddings)[0]
+            
+            # Return average similarity scaled to 0-10
+            avg_similarity = float(similarities.mean())
+            return min(10.0, max(0.0, avg_similarity * 10))
+            
+        except Exception as e:
+            print(f"Error calculating semantic similarity: {e}")
+            return 5.0
+
+    def calculate_relevance_score(self, descriptions: List[str], query: str, expanded_query: str) -> Tuple[float, Dict]:
+        """
+        Calculate enhanced relevance score combining multiple methods
+        """
+        # 1. Semantic similarity score (primary)
+        semantic_score = self.calculate_semantic_similarity(descriptions, expanded_query)
+        
+        # 2. Keyword matching score (secondary)
+        query_words = set(query.lower().split())
+        expanded_words = set(expanded_query.lower().split())
+        all_query_words = query_words.union(expanded_words)
+        
+        keyword_scores = []
         for desc in descriptions:
             desc_words = set(desc.lower().split())
-            # Simple word overlap scoring
-            common_words = query_words.intersection(desc_words)
-            score = len(common_words) / max(len(query_words), 1)
-            total_score += score
+            common_words = all_query_words.intersection(desc_words)
+            score = len(common_words) / max(len(all_query_words), 1)
+            keyword_scores.append(score)
         
-        # Average score and scale to 0-10
-        avg_score = (total_score / max(len(descriptions), 1)) * 10
-        return min(10.0, avg_score)
+        avg_keyword_score = sum(keyword_scores) / max(len(keyword_scores), 1) * 10
+        
+        # 3. Content density score (how detailed are the descriptions)
+        avg_description_length = sum(len(desc.split()) for desc in descriptions) / max(len(descriptions), 1)
+        density_score = min(10.0, avg_description_length / 10)  # Normalize to 0-10
+        
+        # Combine scores with weights
+        final_score = (
+            0.6 * semantic_score +      # Primary: semantic understanding
+            0.3 * avg_keyword_score +   # Secondary: keyword matching
+            0.1 * density_score         # Tertiary: content richness
+        )
+        
+        score_breakdown = {
+            'semantic_score': semantic_score,
+            'keyword_score': avg_keyword_score,
+            'density_score': density_score,
+            'final_score': min(10.0, final_score)
+        }
+        
+        return min(10.0, final_score), score_breakdown
 
-    def analyze_scene(self, video_path, start_time, end_time, query):
+    def analyze_scene(self, video_path, start_time, end_time, query, expanded_query):
         """
-        Analyze a single scene and return relevance score and explanation
+        Analyze a single scene with enhanced understanding
         """
         # Extract key frames from the scene
         frames = self.extract_key_frames(video_path, start_time, end_time)
         
         if not frames:
-            return 0.0, "No frames could be extracted from this scene."
+            return 0.0, "No frames could be extracted from this scene.", {}
         
         # Analyze each frame
         descriptions = []
         for i, frame in enumerate(frames):
-            desc = self.analyze_single_frame(frame, query)
+            desc = self.analyze_single_frame(frame, expanded_query)
             descriptions.append(desc)
-            print(f"    Frame {i+1}: {desc}")
+            print(f"    Frame {i+1}: {desc[:100]}...")  # Truncate for display
         
-        # Calculate relevance score
-        relevance_score = self.calculate_relevance_score(descriptions, query)
+        # Calculate enhanced relevance score
+        relevance_score, score_breakdown = self.calculate_enhanced_relevance_score(
+            descriptions, query, expanded_query
+        )
         
-        # Create explanation
         combined_description = " | ".join(descriptions)
-        explanation = f"Scene contains: {combined_description}"
+        explanation = f"Scene analysis: {combined_description}"
         
-        # Simple keyword matching for additional scoring
-        query_lower = query.lower()
-        desc_lower = combined_description.lower()
-        
-        # Boost score if query keywords appear in descriptions
-        query_keywords = query_lower.split()
-        keyword_matches = sum(1 for keyword in query_keywords if keyword in desc_lower)
-        keyword_boost = (keyword_matches / len(query_keywords)) * 3  # Up to 3 point boost
-        
-        final_score = min(10.0, relevance_score + keyword_boost)
-        
-        return final_score, explanation
+        return relevance_score, explanation, score_breakdown
 
     def judge_scenes(self, video_path, scenes_with_scores, query):
         """
-        Judge multiple scenes and return the most relevant one
+        Judge multiple scenes with enhanced analysis
         """
-        print(f"\nAnalyzing {len(scenes_with_scores)} scenes with video understanding model...")
+        print(f"\nExpanding query with Gemini...")
+        expanded_query = self.expand_query_with_gemini(query)
+        
+        print(f"\nAnalyzing {len(scenes_with_scores)} scenes with enhanced video understanding...")
         
         detailed_results = []
         
@@ -233,7 +304,15 @@ class VideoJudge:
             print(f"\nAnalyzing Scene {i+1}: {start_time:.1f}s - {end_time:.1f}s")
             
             try:
-                relevance_score, explanation = self.analyze_scene(video_path, start_time, end_time, query)
+                relevance_score, explanation, score_breakdown = self.analyze_scene(
+                    video_path, start_time, end_time, query, expanded_query
+                )
+                
+                # Enhanced combined score calculation
+                combined_score = (
+                    0.7 * relevance_score +           # Higher weight on LLM analysis
+                    0.3 * (clip_similarity * 10)      # Lower weight on CLIP
+                )
                 
                 detailed_results.append({
                     'scene_index': i + 1,
@@ -241,25 +320,33 @@ class VideoJudge:
                     'end_time': end_time,
                     'clip_similarity': clip_similarity,
                     'llm_relevance_score': relevance_score,
+                    'score_breakdown': score_breakdown,
                     'explanation': explanation,
-                    'combined_score': 0.6 * relevance_score + 0.4 * (clip_similarity * 10)
+                    'combined_score': combined_score,
+                    'expanded_query': expanded_query
                 })
                 
                 print(f"    LLM Relevance Score: {relevance_score:.2f}/10")
+                print(f"      - Semantic: {score_breakdown['semantic_score']:.2f}")
+                print(f"      - Keyword: {score_breakdown['keyword_score']:.2f}")
+                print(f"      - Density: {score_breakdown['density_score']:.2f}")
                 print(f"    CLIP Similarity: {clip_similarity:.4f}")
-                print(f"    Combined Score: {detailed_results[-1]['combined_score']:.2f}")
+                print(f"    Combined Score: {combined_score:.2f}")
                 
             except Exception as e:
                 print(f"    Error analyzing scene: {e}")
+                self.clear_memory()
                 # Fallback to CLIP score only
                 detailed_results.append({
                     'scene_index': i + 1,
                     'start_time': start_time,
                     'end_time': end_time,
                     'clip_similarity': clip_similarity,
-                    'llm_relevance_score': 5.0,  # Default score
+                    'llm_relevance_score': 5.0,
+                    'score_breakdown': {'semantic_score': 5.0, 'keyword_score': 5.0, 'density_score': 5.0, 'final_score': 5.0},
                     'explanation': f"Error in analysis: {str(e)}",
-                    'combined_score': clip_similarity * 10
+                    'combined_score': clip_similarity * 10,
+                    'expanded_query': expanded_query
                 })
 
         # Sort by combined score
