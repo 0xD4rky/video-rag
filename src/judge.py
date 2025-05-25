@@ -2,27 +2,115 @@ import torch
 import cv2
 import os
 import json
-from transformers import BlipProcessor, BlipForConditionalGeneration
+from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
 from PIL import Image
 import numpy as np
 from tqdm import tqdm
 import re
+from sentence_transformers import SentenceTransformer, util
+import google.generativeai as genai
+from typing import List, Tuple, Dict
+import gc
+from dotenv import load_dotenv
+
+
 
 class VideoJudge:
-    def __init__(self, model_name="Salesforce/blip-image-captioning-base"):
+    def __init__(self, model_name="llava-hf/llava-v1.6-mistral-7b-hf"):
         """
         Initialize the Video Judge using BLIP model (much more memory efficient)
         """
         self.device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
         print(f"Loading video understanding model on {self.device}...")
+
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
         
-        # Load BLIP model and processor (much lighter than Qwen2-VL)
-        self.processor = BlipProcessor.from_pretrained(model_name)
-        self.model = BlipForConditionalGeneration.from_pretrained(
-            model_name,
-            torch_dtype=torch.float16 if torch.backends.mps.is_available() else torch.float32,
-        ).to(self.device)
+        # trying llava instead of blip but using a fallback in case blip fails
+        try:
+            self.processor = LlavaNextProcessor.from_pretrained(model_name)
+            self.model = LlavaNextForConditionalGeneration.from_pretrained(
+                model_name,
+                torch_dtype=torch.float16 if torch.backends.mps.is_available() else torch.float32,
+                low_cpu_mem_usage=True,
+            ).to(self.device)
+            
+            # enabling memory efficient attention if available
+            if hasattr(self.model, 'enable_memory_efficient_attention'):
+                self.model.enable_memory_efficient_attention()
+            
+            print("LLaVA model loaded with optimizations")
+            self.use_llava = True
+
+        except Exception as e:
+            print(f"Error loading LLaVA model: {e}")
+            print("Falling back to BLIP model...")
+            # Fallback to original blip model
+            from transformers import BlipProcessor, BlipForConditionalGeneration
+            self.processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+            self.model = BlipForConditionalGeneration.from_pretrained(
+                "Salesforce/blip-image-captioning-base",
+                torch_dtype=torch.float16 if torch.backends.mps.is_available() else torch.float32,
+            ).to(self.device)
+            self.use_llava = False
         print("Video understanding model loaded successfully!")
+
+        print("Loading sentence transformer for semantic similarity...")
+        self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+        print("Sentence transformer loaded!")
+
+        if gemini_api_key:
+            genai.configure(api_key=gemini_api_key)
+            self.gemini_model = genai.GenerativeModel('gemini-pro')
+            print("Gemini model configured for query expansion!")
+        else:
+            self.gemini_model = None
+            print("Warning: No Gemini API key provided. Query expansion will be skipped.")
+
+
+    def clear_memory(self):
+        """
+        Clear GPU memory to prevent OOM errors
+        """
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+        gc.collect()
+
+    def expand_query_with_gemini(self, query: str) -> str:
+        if not self.gemini_model:
+            return query
+        
+        try:
+
+            expansion_prompt = f"""
+            You are helping to expand a search query for video analysis. The query will be used to find relevant scenes in a video.
+            
+            Original query: "{query}"
+            
+            Please expand this query by:
+            1. Adding synonyms and related terms
+            2. Including visual descriptions that might appear in relevant scenes
+            3. Adding context about what actions, objects, or situations might be present
+            4. Keeping it concise but comprehensive
+            
+            Return only the expanded query without explanation.
+            
+            Example:
+            Original: "person cooking"
+            Expanded: "person cooking food, chef preparing meal, kitchen activities, cutting vegetables, stirring pot, using stove, culinary preparation, food preparation, cooking utensils, kitchen tools"
+            
+            Now expand: "{query}"
+            """
+
+            response = self.gemini_model.generate_content(expansion_prompt)
+            expanded_query = response.text.strip()
+            print(f"Original query: {query}")
+            print(f"Expanded query: {expanded_query}")
+            
+            return expanded_query
+
+        except Exception as e:
+            print(f"Error expanding query with Gemini: {e}")
+            return query
 
     def extract_key_frames(self, video_path, start_time, end_time, num_frames=3):
         """
