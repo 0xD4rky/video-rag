@@ -1,3 +1,1 @@
-# Ishaan's Computer Vision Stack
-
-## CV Paper analysis and implementations
+video rag for retrieval of clips from video via agents
