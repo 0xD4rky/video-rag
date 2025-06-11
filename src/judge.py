@@ -1,49 +1,34 @@
-import os
-import torch
 import cv2
-import json
-from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
-from qwen_vl_utils import process_vision_info
+from typing import List, Tuple, Dict
+import torch
+from torch.nn.functional import cosine_similarity
 from PIL import Image
-import numpy as np
-from tqdm import tqdm
+
+from embeddings import load_models, processor, model, device
+
 
 class VideoJudge:
+    """Simple judge that scores scenes using CLIP similarity."""
 
-    def __init__(self, model_name = "Qwen/Qwen2-VL-2B-Instruct"):
-        """
-        Initialize the Video Judge using Qwen2-VL model
-        """
+    def __init__(self):
+        load_models()
 
-        self.device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
-        print(f"loading video understanding model on {self.device}")
-
-        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
-            model_name, 
-            torch_dtype=torch.float16 if torch.backends.mps.is_available() else torch.float32,
-            device_map="auto"
-        )
-        self.processor = AutoProcessor.from_pretrained(model_name)
-        print("Video understanding model loaded successfully!")
-
-    def extract_key_frames(self, video_path, start_time, end_time, num_frames=5):
-        """
-        Extract key frames from a video segment
-        """
+    @staticmethod
+    def extract_key_frames(video_path: str, start_time: float, end_time: float, num_frames: int = 5) -> List[Image.Image]:
+        """Extract ``num_frames`` evenly spaced frames from the video segment."""
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
-        
+
         start_frame = int(start_time * fps)
         end_frame = int(end_time * fps)
-        total_frames = end_frame - start_frame
-        
-        # Calculate frame indices to extract
+        total_frames = max(end_frame - start_frame, 1)
+
         if total_frames <= num_frames:
             frame_indices = list(range(start_frame, end_frame))
         else:
             step = total_frames // num_frames
             frame_indices = [start_frame + i * step for i in range(num_frames)]
-        
+
         frames = []
         for frame_idx in frame_indices:
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
@@ -51,6 +36,35 @@ class VideoJudge:
             if ret:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frames.append(Image.fromarray(frame))
-        
         cap.release()
         return frames
+
+    def score_scene(self, video_path: str, start_time: float, end_time: float, text_embedding: torch.Tensor) -> float:
+        frames = self.extract_key_frames(video_path, start_time, end_time)
+        if not frames:
+            return -float("inf")
+
+        inputs = processor(images=frames, return_tensors="pt", padding=True)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            img_embeds = model.get_image_features(**inputs)
+            img_embeds = img_embeds / img_embeds.norm(dim=-1, keepdim=True)
+
+        sims = cosine_similarity(text_embedding, img_embeds)
+        return sims.max().item()
+
+
+def select_best_scene(video_path: str, candidate_scenes: List[Tuple[float, float, float]], text_embedding: torch.Tensor) -> Dict:
+    """Select the best scene from ``candidate_scenes`` using the ``VideoJudge``."""
+    judge = VideoJudge()
+    best = None
+    best_score = -float("inf")
+    for start, end, base_score in candidate_scenes:
+        judge_score = judge.score_scene(video_path, start, end, text_embedding)
+        combined = 0.6 * base_score + 0.4 * judge_score
+        if combined > best_score:
+            best_score = combined
+            best = {"start_time": start, "end_time": end, "combined_score": combined}
+    return best
+

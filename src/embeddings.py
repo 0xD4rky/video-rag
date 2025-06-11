@@ -13,30 +13,36 @@ import numpy as np
 import shutil
 
 from scene import extract_scenes, save_scene_video
-from judge import select_best_scene
 
-# Use CUDA if available, otherwise MPS, then CPU
-device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
-print(f"Using device: {device}")
+# Setup device and models lazily so importing this module does not trigger heavy
+# initialisation or prompt for user input.  Functions will call ``load_models``
+# when needed.
 
-# Load models
-model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+)
+model = None
+processor = None
 
 load_dotenv()
 SERPAPI_KEY = os.environ.get("SERPAPI_KEY")
 
-# Input from the user
-video_path = input("Enter the video's path to be searched : ").strip()
-text_query = input("Enter your query to be searched in the video : ").strip()
+def load_models():
+    """Load CLIP model and processor if they are not already initialised."""
+    global model, processor
+    if model is None or processor is None:
+        print(f"Using device: {device}")
+        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    return model, processor
 
 
-def fetch_images_from_google(query, num_images=5):
+def fetch_images_from_google(query, num_images=5, serpapi_key=SERPAPI_KEY):
     search = GoogleSearch({
         "q": query,
         "tbm": "isch",
         "num": num_images,
-        "api_key": SERPAPI_KEY
+        "api_key": serpapi_key
     })
     results = search.get_dict()
     image_urls = [img["original"] for img in results.get("images_results", [])[:num_images]]
@@ -54,6 +60,7 @@ def fetch_images_from_google(query, num_images=5):
     return images
 
 def create_image_embeddings(images, normalize=True):
+    load_models()
     image_embeddings = []
     
     for url, img in tqdm(images, desc="Creating image embeddings"):
@@ -75,7 +82,8 @@ def create_image_embeddings(images, normalize=True):
         return torch.stack(image_embeddings)
     return None
 
-def create_text_embeddings(text_query, normalize=True):
+def create_text_embeddings(text_query, normalize=True, use_serpapi=True):
+    load_models()
     text_inputs = processor(text=[text_query], return_tensors="pt", padding=True)
     text_inputs = {k: v.to(device) for k, v in text_inputs.items()}
     
@@ -85,7 +93,9 @@ def create_text_embeddings(text_query, normalize=True):
     if normalize:
         text_embedding = text_embedding / text_embedding.norm(dim=-1, keepdim=True)
 
-    fetched_images = fetch_images_from_google(text_query + " images")
+    fetched_images = None
+    if use_serpapi and SERPAPI_KEY:
+        fetched_images = fetch_images_from_google(text_query + " images")
     if fetched_images:
         image_embeddings = create_image_embeddings(fetched_images)
         if image_embeddings is not None:
@@ -96,14 +106,18 @@ def create_text_embeddings(text_query, normalize=True):
 
     return text_embedding
 
-print("Extracting scenes from video...")
-scenes, video_fps = extract_scenes(video_path, scene_duration=5, fps=5)
-if not scenes:
-    print("No scenes extracted.")
-    exit()
-print(f"Extracted {len(scenes)} scenes from video")
+def extract_video_scenes(video_path, scene_duration=5, fps=5):
+    """Extract scenes from the given video and report progress."""
+    print("Extracting scenes from video...")
+    scenes, video_fps = extract_scenes(video_path, scene_duration=scene_duration, fps=fps)
+    if not scenes:
+        print("No scenes extracted.")
+    else:
+        print(f"Extracted {len(scenes)} scenes from video")
+    return scenes, video_fps
 
 def process_scenes(scenes, text_embedding):
+    load_models()
     scores = []
     text_embedding = text_embedding.to(device)
     
@@ -129,10 +143,14 @@ def process_scenes(scenes, text_embedding):
     scores.sort(key=lambda x: x[2], reverse=True)
     return scores
 
-def main():
+def process_video(video_path, text_query, use_serpapi=True):
     print(f"Creating embeddings for query: '{text_query}'")
-    text_embedding = create_text_embeddings(text_query)
-    
+    text_embedding = create_text_embeddings(text_query, use_serpapi=use_serpapi)
+
+    scenes, _ = extract_video_scenes(video_path, scene_duration=5, fps=5)
+    if not scenes:
+        return None
+
     scene_similarity_scores = process_scenes(scenes, text_embedding)
 
     top_k = min(3, len(scene_similarity_scores))
@@ -147,7 +165,8 @@ def main():
     print("USING VIDEO UNDERSTANDING MODEL TO SELECT BEST SCENE")
     print(f"{'='*60}")
     
-    best_scene = select_best_scene(video_path, similar_scenes, text_query)
+    from judge import select_best_scene
+    best_scene = select_best_scene(video_path, similar_scenes, text_embedding)
     
     if best_scene:
         # Save only the best scene selected by the judge
@@ -171,6 +190,13 @@ def main():
         print("Scene retrieved and saved successfully!")
     else:
         print("Could not select the best scene.")
+
+    return best_scene
+
+def main():
+    video_path = input("Enter the video's path to be searched : ").strip()
+    text_query = input("Enter your query to be searched in the video : ").strip()
+    process_video(video_path, text_query)
 
 
 if __name__ == "__main__":
