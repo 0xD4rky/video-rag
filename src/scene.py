@@ -1,56 +1,147 @@
+""" detecting scenes and sampling frames from the videos """
+
+import os
 import cv2
-from PIL import Image
+import numpy as np
+import subprocess
+from typing import List, Tuple, Dict
+from scenedetect import detect, ContentDetector, ThresholdDetector
+import ffmpeg
+import logging
 
-def extract_scenes(video_path, scene_duration=5, fps=5):
+
+logging.basicConfig(
+    filename="/Users/darky/Documents/video-rag/data/logs/logs.log",
+    format='%(asctime)s %(message)s',
+    filemode='w'
+    )
+logger = logging.getLogger()
+
+def detect_scenes(
+        video_path: str,
+        method: str = "content",
+        min_len_sec: int = 3
+)-> List[Tuple[float,float]]:
 
     """
-    This function is for extracting the scenes from the video.
+    dececting scenes using pyscene detect
+
+    returns: List of (start_time, end_time) tuple in seconds
     """
-    cap = cv2.VideoCapture(video_path)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    video_fps = int(cap.get(cv2.CAP_PROP_FPS))
-    duration = total_frames / video_fps
+
+    if method == "content":
+        detector = ContentDetector(threshold=30.0, min_scene_len=min_len_sec)
+    else:
+        detector = ThresholdDetector(threshold=12.0, min_scene_len=min_len_sec)
     
+    scene_list = detect(video_path, detector)
+
     scenes = []
-    for start_time in range(0, int(duration), scene_duration):
-        end_time = min(start_time + scene_duration, duration)
-        frames = []
-        frame_indices = []
-        
-        for t in range(int(start_time * video_fps), int(end_time * video_fps), video_fps // fps):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, t)
-            ret, frame = cap.read()
-            if ret:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frames.append(Image.fromarray(frame))
-                frame_indices.append(t)
-        
-        if frames:
-            scenes.append((start_time, end_time, frames, frame_indices))
+    for scene in scene_list:
+        start_time = scene[0].get_seconds()
+        end_time = scene[1].get_seconds()
+        scenes.append((start_time, end_time))
+    
+    logger.info(f"Detected {len(scenes)} scenes in {video_path}")
+    return scenes
 
-    cap.release()
-    return scenes, video_fps
-
-def save_scene_video(video_path, start_time, end_time, output_path):
-
+def sample_frames(
+        video_path : str,
+        interval : int,
+        timestamps: List[Tuple[float, float]]
+)-> Dict[int, List[np.array]]:
+    
     """
-    A function for saving the relevant retrieved scenes
+    scenes -> [frame1, frame2, frame3 .....]
+                    |__| -> interval
+
+    returns: dictionary mapping index of frame with its array
     """
+
     cap = cv2.VideoCapture(video_path)
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+
+    if not cap.isOpened():
+        raise ValueError(f"Could not open video file: {video_path}")
     
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    cap.set(cv2.CAP_PROP_POS_MSEC, start_time * 1000)
-    while cap.get(cv2.CAP_PROP_POS_MSEC) < end_time * 1000:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        out.write(frame)
+    scene_frames = {}
+    for scene_idx, (start_time, end_time) in enumerate(timestamps):
+        start_frame = int(start_time * fps)
+        end_frame = int(end_time * fps)
+
+        start_frame = max(0, min(start_frame, total_frames - 1))
+        end_frame = max(0, min(end_frame, total_frames - 1))
+
+        scene_duration_frames = end_frame - start_frame
+        if scene_duration_frames >= 3:
+            frame_indices = [
+                start_frame,
+                start_frame + scene_duration_frames // 2,
+                end_frame - 1
+            ]
+        else:
+            frame_indices = [start_frame]
+        
+        frames = []
+        for frame_idx in frame_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            
+            if ret:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frames.append(frame_rgb)
+            else:
+                logger.warning(f"Could not read frame {frame_idx}")
+        
+        scene_frames[scene_idx] = frames
+
+    cap.release()
+    logger.info(f"Sampled frames from {len(timestamps)} scenes")
+    return scene_frames
+
+def save_clip(
+        video_path: str, 
+        start: float, 
+        end: float, 
+        out_path: str
+) -> None:
+    """
+    Save a video clip using ffmpeg-python.
+    
+    Args:
+        video_path: Input video path
+        start: Start time in seconds
+        end: End time in seconds
+        out_path: Output clip path
+    """
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    
+    (
+        ffmpeg
+        .input(video_path, ss=start, t=end-start)
+        .output(out_path, vcodec='libx264', acodec='aac')
+        .overwrite_output()
+        .run(quiet=True)
+    )
+    
+    logger.info(f"Saved clip: {out_path}")
+
+def get_video_info(video_path: str) -> Dict[str, float]:
+    cap = cv2.VideoCapture(video_path)
+    
+    if not cap.isOpened():
+        raise ValueError(f"Could not open video file: {video_path}")
+    
+    info = {
+        'fps': cap.get(cv2.CAP_PROP_FPS),
+        'frame_count': cap.get(cv2.CAP_PROP_FRAME_COUNT),
+        'width': cap.get(cv2.CAP_PROP_FRAME_WIDTH),
+        'height': cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
+        'duration': cap.get(cv2.CAP_PROP_FRAME_COUNT) / cap.get(cv2.CAP_PROP_FPS)
+    }
     
     cap.release()
-    out.release()
+    return info
 
