@@ -1,35 +1,102 @@
 import os
-from typing import Optional
+import asyncio
+from typing import List
+import numpy as np
+import requests
+from PIL import Image
+import google.generativeai as genai
+from serpapi import GoogleSearch
+from tenacity import retry, stop_after_attempt, wait_exponential
+from embeddings import ClipEmbedder
+import logging
+from io import BytesIO
 
-try:
-    import google.generativeai as genai
-    _GENAI_AVAILABLE = True
-except Exception:  # pragma: no cover - optional dependency
-    _GENAI_AVAILABLE = False
+logging.basicConfig(
+    filename="/Users/darky/Documents/video-rag/data/logs/query.log",
+    format='%(asctime)s %(message)s',
+    filemode='w'
+    )
+logger = logging.getLogger()
 
-from transformers import pipeline
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+async def expand_query(
+        query: str, 
+        temperature: float = 0.7
+    )-> str:
+
+    """
+    Expand query using Gemini for better search results
+    """
+
+    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+    model = genai.GenerativeModel('gemini-pro')
+
+    prompt = f"""
+    Expand this video search query to include related visual concepts, actions, objects, and scenarios.
+    Keep it concise but comprehensive for better video matching.
+    
+    Original query: {query}
+    
+    Expanded query:
+    """
+
+    response = await asyncio.to_thread(
+        model.generate_content, 
+        prompt, 
+        generation_config=genai.types.GenerationConfig(temperature=temperature)
+    )
+    expanded = response.text.strip()
+    logger.info(f"Expanded query: '{query}' -> '{expanded}'")
+    return expanded
 
 
-class QueryExpander:
-    """Expand user queries using Gemini if available, otherwise a tiny local model."""
-
-    def __init__(self, gemini_api_key: Optional[str] = None):
-        self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY")
-        if self.gemini_api_key and _GENAI_AVAILABLE:
-            genai.configure(api_key=self.gemini_api_key)
-            self.model = genai.GenerativeModel("gemini-pro")
-            self.backend = "gemini"
-        else:
-            # Fallback to a very small text generation model
-            self.generator = pipeline("text-generation", model="sshleifer/tiny-gpt2")
-            self.backend = "local"
-
-    def expand(self, query: str) -> str:
-        if self.backend == "gemini":
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def fetch_serp_images(query: str, k: int = 5) -> List[np.ndarray]:
+    """
+    Fetch reference images from Google Images via SerpAPI.
+    
+    Args:
+        query: Search query
+        k: Number of images to fetch
+        
+    Returns:
+        List of image arrays
+    """
+    search = GoogleSearch({
+        "q": query,
+        "tbm": "isch",
+        "api_key": os.getenv("SERP_API_KEY"),
+        "num": k
+    })
+    
+    results = search.get_dict()
+    images = []
+    
+    if "images_results" in results:
+        for img_result in results["images_results"][:k]:
             try:
-                resp = self.model.generate_content(f"Provide a detailed search query for: {query}")
-                return resp.text.strip()
-            except Exception:
-                pass
-        result = self.generator(f"Expand: {query}", max_new_tokens=20)[0]["generated_text"]
-        return result.strip()
+                img_url = img_result["original"]
+                response = requests.get(img_url, timeout=10)
+                response.raise_for_status()
+                
+                image = Image.open(BytesIO(response.content))
+                image = image.convert("RGB")
+                image_array = np.array(image)
+                images.append(image_array)
+                
+            except Exception as e:
+                logger.warning(f"Failed to fetch image: {e}")
+                continue
+    
+    logger.info(f"Fetched {len(images)} reference images for query: {query}")
+    return images
+
+
+def get_query_embedding(expanded_query: str, embedder: ClipEmbedder) -> np.ndarray:
+    """
+    generating embedding for expanded query.
+    
+    returns: query embedidng vector
+    """
+    return embedder.embed_text(expanded_query)
