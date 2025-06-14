@@ -1,195 +1,171 @@
 import os
-import torch
-import cv2
-import requests
-from io import BytesIO
-from transformers import CLIPProcessor, CLIPModel
-from PIL import Image
-from torch.nn.functional import cosine_similarity
-from serpapi import GoogleSearch
-from dotenv import load_dotenv
-from tqdm import tqdm
+import pickle
+from typing import List, Tuple, Optional
 import numpy as np
-import shutil
-
-from scene import extract_scenes, save_scene_video
-
-device = torch.device(
-    "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-)
-model = None
-processor = None
-
-load_dotenv()
-SERPAPI_KEY = os.environ.get("SERPAPI_KEY")
-
-def load_models():
-    global model, processor
-    if model is None or processor is None:
-        print(f"Using device: {device}")
-        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-    return model, processor
+import torch
+import open_clip
+import faiss
+from PIL import Image
+import logging
 
 
-def fetch_images_from_google(query, num_images=5, serpapi_key=SERPAPI_KEY):
-    search = GoogleSearch({
-        "q": query,
-        "tbm": "isch",
-        "num": num_images,
-        "api_key": serpapi_key
-    })
-    results = search.get_dict()
-    image_urls = [img["original"] for img in results.get("images_results", [])[:num_images]]
-    print(f"Fetching {len(image_urls)} images for query: '{query}'")
-    
-    images = []
-    for url in tqdm(image_urls, desc="Downloading images"):
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                img = Image.open(BytesIO(response.content)).convert("RGB")
-                images.append((url, img))
-        except Exception as e:
-            print(f"Error downloading image from {url}: {e}")
-    return images
+logging.basicConfig(
+    filename="/Users/darky/Documents/video-rag/data/logs/embedding.log",
+    format='%(asctime)s %(message)s',
+    filemode='w'
+    )
+logger = logging.getLogger()
 
-def create_image_embeddings(images, normalize=True):
-    load_models()
-    image_embeddings = []
-    
-    for url, img in tqdm(images, desc="Creating image embeddings"):
-        try:
-            inputs = processor(images=img, return_tensors="pt", padding=True)
-            inputs = {k: v.to(device) for k, v in inputs.items()}
 
-            with torch.no_grad():
-                image_features = model.get_image_features(**inputs)
-            if normalize:
-                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+class Embeddings():
 
-            image_embeddings.append(image_features.squeeze(0))
-            
-        except Exception as e:
-            print(f"Error processing image: {e}")
-
-    if image_embeddings:
-        return torch.stack(image_embeddings)
-    return None
-
-def create_text_embeddings(text_query, normalize=True, use_serpapi=True):
-    load_models()
-    text_inputs = processor(text=[text_query], return_tensors="pt", padding=True)
-    text_inputs = {k: v.to(device) for k, v in text_inputs.items()}
-    
-    with torch.no_grad():
-        text_embedding = model.get_text_features(**text_inputs)
-    
-    if normalize:
-        text_embedding = text_embedding / text_embedding.norm(dim=-1, keepdim=True)
-
-    fetched_images = None
-    if use_serpapi and SERPAPI_KEY:
-        fetched_images = fetch_images_from_google(text_query + " images")
-    if fetched_images:
-        image_embeddings = create_image_embeddings(fetched_images)
-        if image_embeddings is not None:
-            # Weighted average between text and image embeddings
-            text_embedding = 0.6 * text_embedding + 0.4 * image_embeddings.mean(dim=0, keepdim=True)
-            if normalize:
-                text_embedding = text_embedding / text_embedding.norm(dim=-1, keepdim=True)
-
-    return text_embedding
-
-def extract_video_scenes(video_path, scene_duration=5, fps=5):
-    print("Extracting scenes from video...")
-    scenes, video_fps = extract_scenes(video_path, scene_duration=scene_duration, fps=fps)
-    if not scenes:
-        print("No scenes extracted.")
-    else:
-        print(f"Extracted {len(scenes)} scenes from video")
-    return scenes, video_fps
-
-def process_scenes(scenes, text_embedding):
-    load_models()
-    scores = []
-    text_embedding = text_embedding.to(device)
-    
-    for start_time, end_time, frames, frame_indices in tqdm(scenes, desc="Processing scenes"):
-        inputs = processor(images=frames, return_tensors="pt", padding=True)
-        inputs = {k: v.to(device) for k, v in inputs.items()}
+    def __init__(
+        self,
+        model_name: str = "ViT-L-14",
+        pretrained: str = "openai"
+    ):
         
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+        self.model, _, self.preprocess = open_clip.create_model_and_transforms(
+            model_name, pretrained=pretrained, device=self.device
+        )
+        self.tokenizer = open_clip.get_tokenizer(model_name)
+        self.model.eval()
+
+    def embed_images(
+        self,
+        frames : List[np.array]
+    )-> np.array:
+        
+        """
+        returns: mean-pooled embedding vector
+        """
+
+        if not frames:
+            return np.zeros(768)  # ViT-L-14 dimension
+        
+        embeddings = []
         with torch.no_grad():
-            image_embeddings = model.get_image_features(**inputs)
-            image_embeddings = image_embeddings / image_embeddings.norm(dim=-1, keepdim=True)
+            for frame in frames:
+                if frame.dtype != np.uint8:
+                    frame = (frame * 255).astype(np.uint8)
+                pil_image = Image.fromarray(frame)
+
+                image_tensor = self.preprocess(pil_image).unsqueeze(0).to(self.device)
+                embedding = self.model.encode_image(image_tensor)
+                embedding = embedding / embedding.norm(dim=-1, keepdim=True)
+            
+        mean_embedding = np.mean(embeddings, axis=0)
+        return mean_embedding / np.linalg.norm(mean_embedding)
+
+    def embed_text(
+        self,
+        text : str
+    )-> np.array:
         
-        # calc similarity for each frame in the scene
-        similarities = cosine_similarity(text_embedding, image_embeddings)
+        """
+        returns: normalized text embedding
+        """
+
+        with torch.no_grad():
+            text_tokens = self.tokenizer([text]).to(self.device)
+            text_embeddings = self.model.encode_text(text_tokens)
+            text_embeddings = text_embeddings / text_embeddings.norm(dim=-1, keepdim=True)
+            return text_embeddings.cpu().numpy().flatten()
+
+
+class Faiss:
+    
+    def __init__(self, dimension : int = 768, nlist: int = 100):
+
+        """
+        dimension: embedding dimension
+        nlist: no of clusters
+        """
+
+        self.dimension = dimension
+        self.nlist = nlist
+
+        quantizer = faiss.IndexFlatIP(dimension)
+        self.index = faiss.IndexIVFPQ(quantizer, dimension, nlist, 8, 8)
+        self.ids = []
+
+    def add(self, ids: List[int], vectors: np.array) -> None:
+        """adding vecs to the index"""
+
+        if not self.index.is_trained and len(vectors) >= self.nlist:
+            self.index.train(vectors)        
+        if self.index.is_trained:
+            self.index.add(vectors)
+            self.ids.extend(ids)
+
+    def search(self, query_vector : np.array, k : int = 10)-> Tuple[np.array, np.array]:
+        """
+        function is used to search for similar vectors from the index
         
-        # using both mean and max for better results
-        mean_similarity = similarities.mean().item()
-        max_similarity = similarities.max().item()
+        accepts: vector to be searched for and not of similar vectors to be retrieved
+        returns: tuple of scores and vectors
+        """
+
+        if not self.index.is_trained:
+            return np.array([]), np.array([])
+
+        query_vector = query_vector.reshape(1, -1)
+        scores, indices = self.index.search(query_vector, k)
+        return scores[0], indices[0]
+
+    def save(self, filepath: str) -> None:
+        """Save index to disk"""
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        faiss.write_index(self.index, filepath)
         
-        # combine scores with weighted average
-        combined_score = 0.4 * mean_similarity + 0.6 * max_similarity
-        scores.append((start_time, end_time, combined_score))
-
-    scores.sort(key=lambda x: x[2], reverse=True)
-    return scores
-
-def process_video(video_path, text_query, use_serpapi=True):
-    print(f"Creating embeddings for query: '{text_query}'")
-    text_embedding = create_text_embeddings(text_query, use_serpapi=use_serpapi)
-
-    scenes, _ = extract_video_scenes(video_path, scene_duration=5, fps=5)
-    if not scenes:
-        return None
-
-    scene_similarity_scores = process_scenes(scenes, text_embedding)
-
-    top_k = min(3, len(scene_similarity_scores))
-    similar_scenes = scene_similarity_scores[:top_k]
+        ids_path = filepath.replace('.faiss', '_ids.pkl')
+        with open(ids_path, 'wb') as f:
+            pickle.dump(self.ids, f)
     
-    print(f"\nTop {top_k} scenes from CLIP similarity:")
-    for i, (start_time, end_time, similarity) in enumerate(similar_scenes):
-        print(f"Scene {i+1}: {start_time:.1f}s - {end_time:.1f}s | Similarity: {similarity:.4f}")
-    
-    print(f"\n{'='*60}")
-    print("USING VIDEO UNDERSTANDING MODEL TO SELECT BEST SCENE")
-    print(f"{'='*60}")
-    
-    from judge import select_best_scene
-    best_scene = select_best_scene(video_path, similar_scenes, text_embedding)
-    
-    if best_scene:
-        save_dir = os.path.dirname(video_path) 
-        output_dir = os.path.join(save_dir, "output")
-
-        if os.path.exists(output_dir):
-            shutil.rmtree(output_dir)
-        os.makedirs(output_dir, exist_ok=True)
-
-        scene_video_path = os.path.join(output_dir, f"best_scene_{int(best_scene['start_time'])}s_{int(best_scene['end_time'])}s.mp4")
-        save_scene_video(video_path, best_scene['start_time'], best_scene['end_time'], scene_video_path)
+    def load(self, filepath: str) -> None:
+        """Load index from disk"""
+        self.index = faiss.read_index(filepath)
         
-        print(f"\n{'='*60}")
-        print("FINAL RESULT:")
-        print(f"{'='*60}")
-        print(f"Best scene saved: {os.path.basename(scene_video_path)}")
-        print(f"Time span: {best_scene['start_time']:.1f}s - {best_scene['end_time']:.1f}s")
-        print(f"Final score: {best_scene['combined_score']:.2f}")
-        print(f"Location: {scene_video_path}")
-        print("Scene retrieved and saved")
+        ids_path = filepath.replace('.faiss', '_ids.pkl')
+        if os.path.exists(ids_path):
+            with open(ids_path, 'rb') as f:
+                self.ids = pickle.load(f)
+    
+
+def get_or_build_index(
+    video_id: str, 
+    scene_vectors: np.ndarray, 
+    force: bool = False
+) -> Faiss:
+    """
+    Get existing index or build new one for video.
+    
+    Args:
+        video_id: Unique video identifier
+        scene_vectors: Scene embedding vectors
+        force: Force rebuild even if index exists
+        
+    Returns:
+        FAISS index ready for search
+    """
+    index_path = f"data/faiss/{video_id}.faiss"
+    
+    index = Faiss()
+    
+    if os.path.exists(index_path) and not force:
+        index.load(index_path)
+        logger.info(f"Loaded existing index for {video_id}")
     else:
-        print("Could not select the best scene.")
+        scene_ids = list(range(len(scene_vectors)))
+        index.add(scene_ids, scene_vectors)
+        index.save(index_path)
+        logger.info(f"Built new index for {video_id} with {len(scene_vectors)} vectors")
+    
+    return index
+    
 
-    return best_scene
 
-def main():
-    video_path = input("Enter the video's path to be searched : ").strip()
-    text_query = input("Enter your query to be searched in the video : ").strip()
-    process_video(video_path, text_query)
+                
 
 
-if __name__ == "__main__":
-    main()
