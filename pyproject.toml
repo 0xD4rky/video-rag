@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = {file = "LICENSE"}
 authors = [
-    {name = "Your Name", email = "ishaan.kumar281@gmail.com"},
+    {name = "Darky", email = "ishaan.kumar281@gmail.com"},
 ]
 keywords = ["video", "rag", "retrieval", "ai", "agents"]
 classifiers = [
