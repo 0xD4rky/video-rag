@@ -1,102 +1,140 @@
+"""Query expansion and image fetching utilities."""
+
 import os
 import asyncio
 from typing import List
 import numpy as np
 import requests
-from PIL import Image
+from io import BytesIO
 import google.generativeai as genai
 from serpapi import GoogleSearch
-from tenacity import retry, stop_after_attempt, wait_exponential
+from PIL import Image
 from embeddings import ClipEmbedder
+from tenacity import retry, stop_after_attempt, wait_exponential
 import logging
-from io import BytesIO
 
-logging.basicConfig(
-    filename="/Users/darky/Documents/video-rag/data/logs/query.log",
-    format='%(asctime)s %(message)s',
-    filemode='w'
-    )
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-async def expand_query(
-        query: str, 
-        temperature: float = 0.7
-    )-> str:
-
+async def expand_query(query: str, temperature: float = 0.7) -> str:
+    """Expand query using Gemini for better search results.
+    
+    Args:
+        query: Original search query
+        temperature: LLM sampling temperature
+        
+    Returns:
+        Expanded query string
     """
-    Expand query using Gemini for better search results
-    """
-
-    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-    model = genai.GenerativeModel('gemini-pro')
-
-    prompt = f"""
-    Expand this video search query to include related visual concepts, actions, objects, and scenarios.
-    Keep it concise but comprehensive for better video matching.
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    
+    if not gemini_key:
+        logger.warning("No GEMINI_API_KEY found for query expansion")
+        return query
+    
+    expansion_prompt = f"""
+    Expand this video search query to include related visual elements, actions, objects, and contexts that would help find relevant video scenes. Keep it concise but comprehensive.
     
     Original query: {query}
     
-    Expanded query:
-    """
+    Expanded query:"""
+    
+    try:
+        genai.configure(api_key=gemini_key)
+        model = genai.GenerativeModel('gemini-pro')
+        response = await asyncio.to_thread(
+            model.generate_content, 
+            expansion_prompt,
+            generation_config=genai.types.GenerationConfig(temperature=temperature)
+        )
+        expanded = response.text.strip()
+        logger.info(f"Expanded query: '{query}' -> '{expanded}'")
+        return expanded
+        
+    except Exception as e:
+        logger.warning(f"Query expansion failed: {e}")
+        return query
 
-    response = await asyncio.to_thread(
-        model.generate_content, 
-        prompt, 
-        generation_config=genai.types.GenerationConfig(temperature=temperature)
-    )
-    expanded = response.text.strip()
-    logger.info(f"Expanded query: '{query}' -> '{expanded}'")
-    return expanded
 
-
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def fetch_serp_images(query: str, k: int = 5) -> List[np.ndarray]:
-    """
-    Fetch reference images from Google Images via SerpAPI.
+def fetch_images_from_google(query: str, num_images: int = 2) -> List[Image.Image]:
+    """Fetch images from Google using SerpAPI.
     
     Args:
         query: Search query
-        k: Number of images to fetch
+        num_images: Number of images to fetch
         
     Returns:
-        List of image arrays
+        List of PIL Images
     """
-    search = GoogleSearch({
-        "q": query,
-        "tbm": "isch",
-        "api_key": os.getenv("SERP_API_KEY"),
-        "num": k
-    })
+    serpapi_key = os.getenv("SERPAPI_KEY")
     
-    results = search.get_dict()
-    images = []
+    if not serpapi_key:
+        logger.warning("No SERPAPI_KEY found for image fetching")
+        return []
     
-    if "images_results" in results:
-        for img_result in results["images_results"][:k]:
+    try:
+        search = GoogleSearch({
+            "q": query + " image",
+            "tbm": "isch",
+            "num": num_images,
+            "api_key": serpapi_key
+        })
+        results = search.get_dict()
+        image_urls = [img["original"] for img in results.get("images_results", [])[:num_images]]
+        logger.info(f"Fetched {len(image_urls)} image URLs for query: {query}")
+        
+        images = []
+        for url in image_urls:
             try:
-                img_url = img_result["original"]
-                response = requests.get(img_url, timeout=10)
-                response.raise_for_status()
-                
-                image = Image.open(BytesIO(response.content))
-                image = image.convert("RGB")
-                image_array = np.array(image)
-                images.append(image_array)
-                
+                response = requests.get(url, timeout=10)
+                if response.status_code == 200:
+                    img = Image.open(BytesIO(response.content)).convert("RGB")
+                    images.append(img)
             except Exception as e:
-                logger.warning(f"Failed to fetch image: {e}")
+                logger.warning(f"Failed to fetch image from {url}: {e}")
                 continue
+        
+        return images
+        
+    except Exception as e:
+        logger.warning(f"Image fetching failed: {e}")
+        return []
+
+
+def get_enhanced_query_embedding(expanded_query: str, embedder: ClipEmbedder) -> np.ndarray:
+    """Generate enhanced embedding combining text and reference images.
     
-    logger.info(f"Fetched {len(images)} reference images for query: {query}")
-    return images
+    Args:
+        expanded_query: Expanded search query
+        embedder: CLIP embedder instance
+        
+    Returns:
+        Enhanced query embedding vector
+    """
+
+    text_embedding = embedder.embed_text(expanded_query)
+    fetched_images = fetch_images_from_google(expanded_query, num_images=2)
+    
+    if fetched_images:
+
+        image_embedding = embedder.embed_image_list(fetched_images)
+        enhanced_embedding = (text_embedding + image_embedding) / 2 # text + image embeddings (shared space)
+        logger.info(f"Enhanced query embedding with {len(fetched_images)} reference images")
+        return enhanced_embedding
+    else:
+        logger.info("Using text-only embedding")
+        return text_embedding
 
 
 def get_query_embedding(expanded_query: str, embedder: ClipEmbedder) -> np.ndarray:
-    """
-    generating embedding for expanded query.
+    """Generate embedding for expanded query.
     
-    returns: query embedidng vector
+    Args:
+        expanded_query: Expanded search query
+        embedder: CLIP embedder instance
+        
+    Returns:
+        Query embedding vector
     """
-    return embedder.embed_text(expanded_query)
+    return get_enhanced_query_embedding(expanded_query, embedder)
