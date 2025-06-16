@@ -1,11 +1,14 @@
-#!/bin/bash
+
+#!/usr/bin/env bash
 set -e
-VIDEO="${1:-}"
-QUERY="${2:-}"
-if [ -z "$VIDEO" ]; then
-  read -r -p "Enter video path: " VIDEO
-fi
-if [ -z "$QUERY" ]; then
-  read -r -p "Enter query: " QUERY
-fi
-python -m agent --video "$VIDEO" --query "$QUERY" "${@:3}"
+
+echo "Clearing previous data..."
+rm -rf /Users/darky/Documents/video-rag/data/output/*
+rm -rf /Users/darky/Documents/video-rag/data/logs/*
+rm -rf /Users/darky/Documents/video-rag/data/faiss/*
+
+echo "Creating directories..."
+mkdir -p /Users/darky/Documents/video-rag/data/{faiss,output,logs}
+
+echo "Running video search..."
+python3 agent.py
