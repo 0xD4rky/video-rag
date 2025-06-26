@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video RAG - Intelligent Video Search</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <i class="fas fa-video"></i>
+                <span>VideoRAG</span>
+            </div>
+            <div class="nav-tagline">
+                Retrieve your clips with minimal efforts
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-container">
+            <div class="hero-content">
+                <h1 class="hero-title">Search and Understand Your Videos</h1>
+                <p class="hero-subtitle">
+                    Find any scene in natural language. Fast, precise, context-aware results 
+                    that truly understand what you're looking for.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Main Interface -->
+    <main class="main-container">
+        <!-- Upload Section -->
+        <section class="upload-section">
+            <div class="section-container">
+                <h2 class="section-title">Upload Your Video</h2>
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-content">
+                        <i class="fas fa-cloud-upload-alt upload-icon"></i>
+                        <p class="upload-text">
+                            Drag and drop your video here, or <span class="upload-link">browse files</span>
+                        </p>
+                        <p class="upload-hint">Supports MP4, AVI, MOV, MKV, WEBM (max 500MB)</p>
+                    </div>
+                    <input type="file" id="videoInput" accept=".mp4,.avi,.mov,.mkv,.webm" hidden>
+                </div>
+                
+                <!-- Video Preview -->
+                <div class="video-preview" id="videoPreview" style="display: none;">
+                    <div class="video-info">
+                        <div class="video-metadata">
+                            <h3 id="videoName"></h3>
+                            <div class="metadata-grid">
+                                <div class="metadata-item">
+                                    <span class="metadata-label">Duration</span>
+                                    <span class="metadata-value" id="videoDuration"></span>
+                                </div>
+                                <div class="metadata-item">
+                                    <span class="metadata-label">Resolution</span>
+                                    <span class="metadata-value" id="videoResolution"></span>
+                                </div>
+                                <div class="metadata-item">
+                                    <span class="metadata-label">FPS</span>
+                                    <span class="metadata-value" id="videoFPS"></span>
+                                </div>
+                                <div class="metadata-item">
+                                    <span class="metadata-label">Frames</span>
+                                    <span class="metadata-value" id="videoFrames"></span>
+                                </div>
+                            </div>
+                        </div>
+                        <button class="btn-secondary" id="changeVideo">
+                            <i class="fas fa-exchange-alt"></i> Change Video
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Search Section -->
+        <section class="search-section">
+            <div class="section-container">
+                <h2 class="section-title">Describe What You're Looking For</h2>
+                <div class="search-form">
+                    <div class="search-input-group">
+                        <i class="fas fa-search search-icon"></i>
+                        <input 
+                            type="text" 
+                            id="searchQuery" 
+                            class="search-input"
+                            placeholder="E.g., 'person walking in the park', 'car chase scene', 'people talking'..."
+                            disabled
+                        >
+                    </div>
+                    <div class="search-options">
+                        <div class="option-group">
+                            <label for="topN" class="option-label">Number of clips</label>
+                            <select id="topN" class="option-select" disabled>
+                                <option value="1">1 clip</option>
+                                <option value="2">2 clips</option>
+                                <option value="3" selected>3 clips</option>
+                                <option value="4">4 clips</option>
+                                <option value="5">5 clips</option>
+                            </select>
+                        </div>
+                        <button id="searchBtn" class="btn-primary" disabled>
+                            <i class="fas fa-search"></i>
+                            Search Video
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Processing Section -->
+        <section class="processing-section" id="processingSection" style="display: none;">
+            <div class="section-container">
+                <h2 class="section-title">Processing Your Video</h2>
+                <div class="processing-status">
+                    <div class="processing-indicator">
+                        <div class="spinner"></div>
+                        <span id="processingText">Analyzing video content...</span>
+                    </div>
+                </div>
+                
+                <!-- Live Logs -->
+                <div class="logs-container">
+                    <div class="logs-header">
+                        <h3>Processing Logs</h3>
+                        <button id="clearLogs" class="btn-ghost">
+                            <i class="fas fa-trash"></i> Clear
+                        </button>
+                    </div>
+                    <div class="logs-content" id="logsContent">
+                        <!-- Logs will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Results Section -->
+        <section class="results-section" id="resultsSection" style="display: none;">
+            <div class="section-container">
+                <h2 class="section-title">Search Results</h2>
+                <div class="results-summary" id="resultsSummary">
+                    <!-- Results summary will be inserted here -->
+                </div>
+                
+                <div class="video-grid" id="videoGrid">
+                    <!-- Result videos will be inserted here -->
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Video Modal -->
+    <div class="modal" id="videoModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">Video Preview</h3>
+                <button class="modal-close" id="modalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <video id="modalVideo" controls width="100%">
+                    Your browser does not support the video tag.
+                </video>
+                <div class="modal-metadata" id="modalMetadata">
+                    <!-- Metadata will be inserted here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <p>Uploading video...</p>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div class="toast" id="toast">
+        <div class="toast-content">
+            <i class="toast-icon"></i>
+            <span class="toast-message"></span>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
