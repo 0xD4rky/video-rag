@@ -40,7 +40,7 @@ async def expand_query(query: str, temperature: float = 0.7) -> str:
     
     try:
         genai.configure(api_key=gemini_key)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         response = await asyncio.to_thread(
             model.generate_content, 
             expansion_prompt,
