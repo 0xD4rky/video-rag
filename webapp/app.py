@@ -26,14 +26,11 @@ app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# Ensure directories exist
 Path(app.config['UPLOAD_FOLDER']).mkdir(parents=True, exist_ok=True)
 Path(app.config['OUTPUT_FOLDER']).mkdir(parents=True, exist_ok=True)
 
-# Initialize the video search agent
 video_agent = VideoSearchAgent()
 
-# Store processing logs
 processing_logs = []
 
 class WebSocketHandler(logging.Handler):
@@ -48,7 +45,6 @@ class WebSocketHandler(logging.Handler):
         processing_logs.append(log_entry)
         socketio.emit('log_update', log_entry)
 
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 websocket_handler = WebSocketHandler()
 websocket_handler.setFormatter(logging.Formatter('%(message)s'))
@@ -76,14 +72,12 @@ def upload_video():
     
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        # Add timestamp to avoid conflicts
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"{timestamp}_{filename}"
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
         
         try:
-            # Get video metadata
             video_info = get_video_info(file_path)
             
             return jsonify({
@@ -106,7 +100,7 @@ def upload_video():
 def search_video():
     """Handle video search request"""
     global processing_logs
-    processing_logs = []  # Clear previous logs
+    processing_logs = []
     
     data = request.get_json()
     video_path = data.get('video_path')
@@ -120,7 +114,6 @@ def search_video():
         return jsonify({'error': 'Video file not found'}), 404
     
     try:
-        # Clear previous output files
         output_dir = app.config['OUTPUT_FOLDER']
         if os.path.exists(output_dir):
             for file in os.listdir(output_dir):
@@ -128,17 +121,14 @@ def search_video():
                 if os.path.isfile(file_path):
                     os.remove(file_path)
         
-        # Run the video search
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # Emit start processing event
         socketio.emit('processing_start', {'query': query, 'video': os.path.basename(video_path)})
         
         clips = loop.run_until_complete(video_agent.run(video_path, query, int(top_n)))
         loop.close()
         
-        # Get output video files with metadata
         output_videos = []
         if os.path.exists(output_dir):
             for file in os.listdir(output_dir):
@@ -193,7 +183,6 @@ def search_video():
 def serve_video(filename):
     """Serve video files"""
     try:
-        # Check both upload and output directories
         upload_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         output_path = os.path.join(app.config['OUTPUT_FOLDER'], filename)
         
