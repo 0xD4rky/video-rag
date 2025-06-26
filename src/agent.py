@@ -4,6 +4,7 @@ import os
 import sys
 import asyncio
 import logging
+import argparse
 from pathlib import Path
 import numpy as np
 from dotenv import load_dotenv
@@ -122,10 +123,22 @@ class VideoSearchAgent:
         return output_paths
 
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description='Search for video clips based on a text query')
+    parser.add_argument('video', help='Path to the video file')
+    parser.add_argument('query', help='Text query to search for in the video')
+    parser.add_argument('--top-n', type=int, default=3, 
+                       help='Number of top clips to extract (default: 3)')
+    return parser.parse_args()
+
+
 async def main():
-    video_path = "/Users/darky/Documents/video-rag/data/test_1.mp4"
-    query = "man drinking water"
-    top_n = 3
+    args = parse_args()
+    
+    video_path = args.video
+    query = args.query
+    top_n = args.top_n
     
     if not os.path.exists(video_path):
         print(f"Error: Video file not found: {video_path}")
